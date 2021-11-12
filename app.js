@@ -1,132 +1,87 @@
-const express = require("express");
-const app = express();
-const path = require("path");
-const index = require('./routes/index.router');
-const admin = require("./routes/admin.route");
-const product = require("./routes/product.route");
-const categories = require("./routes/categories.route");
-const PORT = 3000;
+require('dotenv').config();
+
+const createError = require('http-errors');
+const express = require('express');
+const path = require('path');
+const cookieParser = require('cookie-parser');
+const logger = require('morgan');
+const mongoose = require('mongoose');
+const session = require('express-session');
+const passport = require('passport');
+const shopRouter = require('./routes/shop');
+const authRouter = require('./routes/auth');
 const flash = require('connect-flash');
-const mongoose = require("mongoose");
-// Passport Config
-const adminModel = require('./models/admin');
-const customer = require('./models/customers');
-const session = require("express-session");
-const passport = require("passport");
-const LocalStrategy = require("passport-local").Strategy;
+const app = express();
+const MongoDBStore = require('connect-mongodb-session')(session);
+const Cart = require('./models/cart');
+const Product = require('./models/product');
+const compression = require('compression');
+app.use(compression());
+mongoose.set('useCreateIndex', true);
 
-app.use(
-  session({
-    secret: "thesecret",
-    saveUninitialized: true,
-    resave: false,
-    cookie: {maxAge: Infinity, path: '/'}
-  })
-);
-app.use(
-  session({
-    secret: "secret",
-    saveUninitialized: true,
-    resave: false,
-    cookie: {maxAge: Infinity, path: '/admin'}
-  })
-);
+const urlConnect = process.env.DB;
+
+// Connect to database
+mongoose.connect(urlConnect, { useNewUrlParser: true, useUnifiedTopology: true }, err => {
+  if (err) throw err;
+  console.log('Connect successfullyy!!');
+});
+
+// view engine setup
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+app.use(logger('dev'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(cookieParser());
 app.use(flash());
-passport.use(
-  'admin-local',
-  new LocalStrategy(function (userName, password, done) {
-    adminModel.findOne(
-      { 'loginInformation.userName': userName },
-      function (err, user) {
-        if (err) {
-          return done(err);
-        }
-        if (!user) {
-          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
-        }
-        if (user.loginInformation.password !== password) {
-          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
-        } 
-        return done(null, user, {message: 'Đăng nhập thành công!'});
-      }
-    );
-  })
-);
-passport.use(
-  'user-local',
-  new LocalStrategy(function (userName, password, done) {
-    customer.findOne(
-      { 'loginInformation.userName': userName },
-      function (err, user) {
-        if (err) {
-          return done(err);
-        }
-        if (!user) {
-          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
-        }
-        if (user.loginInformation.password !== password) {
-          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
-        } 
-        return done(null, user, {message: 'Đăng nhập thành công!'});
-      }
-    );
+app.use(
+  session({
+    secret: 'notsecret',
+    saveUninitialized: true,
+    resave: false,
+    store: new MongoDBStore({ uri: process.env.DB, collection: 'sessions' }),
+    cookie: { maxAge: 180 * 60 * 1000 }
   })
 );
 
-
+app.use((req, res, next) => {
+  var cart = new Cart(req.session.cart ? req.session.cart : {});
+  req.session.cart = cart;
+  res.locals.session = req.session;
+  next();
+});
 app.use(passport.initialize());
 app.use(passport.session());
-passport.serializeUser((user, done) => {
-    return done(null, {userName: user.loginInformation.userName, type: user.loginInformation.type});
+
+app.use(shopRouter);
+app.use(authRouter);
+
+// pass passport for configuration
+require('./config/passport')(passport);
+
+// catch 404 and forward to error handler
+app.use(function(req, res, next) {
+  next(createError(404));
 });
-passport.deserializeUser((user, done) => {
-  if(user.type == 'Admin') {
-    adminModel.findOne({ 'loginInformation.userName': user.userName }, (err, result) => {
-      if (err) return done(err);
-      if (!result) return done(null, false);
-      if (result.loginInformation.userName == user.userName) {
-        return done(null, result);
-      }
-    });
+
+// error handler
+app.use(function(err, req, res, next) {
+  var cartProduct;
+  if (!req.session.cart) {
+    cartProduct = null;
   } else {
-    customer.findOne({ 'loginInformation.userName': user.userName }, (err, result) => {
-      if (err) return done(err);
-      if (!result) return done(null, false);
-      if (result.loginInformation.userName == user.userName) {
-        return done(null, result);
-      }
-    });
+    var cart = new Cart(req.session.cart);
+    cartProduct = cart.generateArray();
   }
-  });
-// Mongoose connect
-mongoose
-  .connect('mongodb://127.0.0.1/ecommerce', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => {
-    console.log("DB Connected!");
-  })
-  .catch((err) => {
-    console.log(err);
-  });
-mongoose.set("useFindAndModify", false);
-mongoose.connection.on("error", (err) => {
-  console.log(err);
+  // set locals, only providing error in development
+  res.locals.message = err.message;
+  res.locals.error = req.app.get('env') === 'development' ? err : {};
+
+  // render the error page
+  res.status(err.status || 500);
+  res.render('error', { cartProduct: cartProduct });
 });
-// End mongoose connect
 
-app.use(express.json({ limit: "30mb" }));
-app.use(express.urlencoded({ extended: true, limit: "30mb" }));
-app.set("view engine", "ejs");
-app.use(express.static(path.join(__dirname, "/")));
-
-// Router
-app.use("/", index);
-app.use('/admin', admin);
-app.use("/product", product);
-app.use("/categories", categories);
-
-app.listen(PORT, () => {
-  console.log(`Server is started at: localhost:${PORT}`);
-});
+module.exports = app;
