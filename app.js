@@ -1,53 +1,132 @@
-var createError = require('http-errors');
-var express = require('express');
-var path = require('path');
-var cookieParser = require('cookie-parser');
-var logger = require('morgan');
-var session = require('express-session');
-var nodemailer = require('nodemailer');
+const express = require("express");
+const app = express();
+const path = require("path");
+const index = require('./routes/index.router');
+const admin = require("./routes/admin.route");
+const product = require("./routes/product.route");
+const categories = require("./routes/categories.route");
+const PORT = 3000;
+const flash = require('connect-flash');
+const mongoose = require("mongoose");
+// Passport Config
+const adminModel = require('./models/admin');
+const customer = require('./models/customers');
+const session = require("express-session");
+const passport = require("passport");
+const LocalStrategy = require("passport-local").Strategy;
 
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
-var catalogRouter = require('./routes/catalog');
-var productRouter = require('./routes/product');
+app.use(
+  session({
+    secret: "thesecret",
+    saveUninitialized: true,
+    resave: false,
+    cookie: {maxAge: Infinity, path: '/'}
+  })
+);
+app.use(
+  session({
+    secret: "secret",
+    saveUninitialized: true,
+    resave: false,
+    cookie: {maxAge: Infinity, path: '/admin'}
+  })
+);
+app.use(flash());
+passport.use(
+  'admin-local',
+  new LocalStrategy(function (userName, password, done) {
+    adminModel.findOne(
+      { 'loginInformation.userName': userName },
+      function (err, user) {
+        if (err) {
+          return done(err);
+        }
+        if (!user) {
+          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
+        }
+        if (user.loginInformation.password !== password) {
+          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
+        } 
+        return done(null, user, {message: 'Đăng nhập thành công!'});
+      }
+    );
+  })
+);
+passport.use(
+  'user-local',
+  new LocalStrategy(function (userName, password, done) {
+    customer.findOne(
+      { 'loginInformation.userName': userName },
+      function (err, user) {
+        if (err) {
+          return done(err);
+        }
+        if (!user) {
+          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
+        }
+        if (user.loginInformation.password !== password) {
+          return done(null, false, {message: 'Sai tên tài khoản hoặc mật khẩu!'});
+        } 
+        return done(null, user, {message: 'Đăng nhập thành công!'});
+      }
+    );
+  })
+);
 
-var app = express();
 
-// view engine setup
-app.set('views', path.join(__dirname, 'views'));
-app.set('view engine', 'ejs');
-
-app.use(logger('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(session({
-  secret: 'abcdefg',
-  resave: true,
-  saveUninitialized: true,
-  cookie: { maxAge: 1200000 }
-}));
-
-app.use('/', indexRouter);
-app.use('/users', usersRouter);
-app.use('/danh-muc', catalogRouter);
-app.use('/san-pham', productRouter);
-
-// catch 404 and forward to error handler
-app.use(function(req, res, next) {
-  next(createError(404));
+app.use(passport.initialize());
+app.use(passport.session());
+passport.serializeUser((user, done) => {
+    return done(null, {userName: user.loginInformation.userName, type: user.loginInformation.type});
 });
-
-// error handler
-app.use(function(err, req, res, next) {
-  // set locals, only providing error in development
-  res.locals.message = err.message;
-  res.locals.error = req.app.get('env') === 'development' ? err : {};
-
-  // render the error page
-  res.status(err.status || 500);
-  res.render('error');
+passport.deserializeUser((user, done) => {
+  if(user.type == 'Admin') {
+    adminModel.findOne({ 'loginInformation.userName': user.userName }, (err, result) => {
+      if (err) return done(err);
+      if (!result) return done(null, false);
+      if (result.loginInformation.userName == user.userName) {
+        return done(null, result);
+      }
+    });
+  } else {
+    customer.findOne({ 'loginInformation.userName': user.userName }, (err, result) => {
+      if (err) return done(err);
+      if (!result) return done(null, false);
+      if (result.loginInformation.userName == user.userName) {
+        return done(null, result);
+      }
+    });
+  }
+  });
+// Mongoose connect
+mongoose
+  .connect('mongodb://127.0.0.1/ecommerce', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => {
+    console.log("DB Connected!");
+  })
+  .catch((err) => {
+    console.log(err);
+  });
+mongoose.set("useFindAndModify", false);
+mongoose.connection.on("error", (err) => {
+  console.log(err);
 });
+// End mongoose connect
 
-module.exports = app;
+app.use(express.json({ limit: "30mb" }));
+app.use(express.urlencoded({ extended: true, limit: "30mb" }));
+app.set("view engine", "ejs");
+app.use(express.static(path.join(__dirname, "/")));
+
+// Router
+app.use("/", index);
+app.use('/admin', admin);
+app.use("/product", product);
+app.use("/categories", categories);
+
+app.listen(PORT, () => {
+  console.log(`Server is started at: localhost:${PORT}`);
+});
